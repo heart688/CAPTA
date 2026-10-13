@@ -1,0 +1,153 @@
+{
+  "scope": "mechanical extraction of CAPTA production code; not a byte-identical historical launch or all-baseline release",
+  "sources": [
+    {
+      "source_file": "vendor/old_models.py",
+      "sha256": "582b6e939afd8538a0522a1b3a588249297b7b3663fc01624de62a79d6f4413c",
+      "selected_symbols": [
+        "FeedForward",
+        "IndependentBlock",
+        "DenseVariableBlock",
+        "GraphVariableBlock",
+        "DynamicLatentRouter",
+        "PersistentPrototypeRouter",
+        "StrongTransferForecaster"
+      ]
+    },
+    {
+      "source_file": "traffic_module_candidates_v1.py",
+      "sha256": "12e7db85ff7603cfbee50688aae8616a219aa914bd5d0217950d87ed4593aac5",
+      "selected_symbols": [
+        "_recipe_name",
+        "_speed",
+        "_statistics",
+        "observed_state",
+        "regime_weights",
+        "TrendInnovationProjection",
+        "CandidateHook",
+        "build_candidate"
+      ]
+    },
+    {
+      "source_file": "vendor/data.py",
+      "sha256": "bb0621061317cfe7089ff6f2a949d9cd209f9d34750fbfa490a702ba91217b6c",
+      "selected_symbols": [
+        "Range",
+        "CityData",
+        "sha256_file",
+        "_day_of_week",
+        "load_city",
+        "window_starts_inside",
+        "fit_speed_stats",
+        "node_profile",
+        "TrafficWindows"
+      ]
+    },
+    {
+      "source_file": "run_federated_micro.py",
+      "sha256": "15e1f741db3d9af6750244032875197d02e1ac66a58b3e52ca61db28122de132",
+      "selected_symbols": [
+        "seed",
+        "is_shared",
+        "train",
+        "save"
+      ]
+    },
+    {
+      "source_file": "run_incremental_aggregation_micro.py",
+      "sha256": "5215c5c6a8bf81b534ab95c4ef533ee5f9bed48c5944ade8a03d88d09abe30ee",
+      "selected_symbols": [
+        "six",
+        "group"
+      ]
+    },
+    {
+      "source_file": "run_decoupled_response_micro.py",
+      "sha256": "fec7483f450be524f2e1d62d0c1326fccf6aa0288b4f47dfb1c0135ef5249d97",
+      "selected_symbols": [
+        "solve"
+      ]
+    },
+    {
+      "source_file": "run_module_refinement_micro.py",
+      "sha256": "ca67cf6975d580bccbf1360478e938c134d8cf049e69b5527e3fc55e56c47097",
+      "selected_symbols": [
+        "optimizer"
+      ]
+    },
+    {
+      "source_file": "run_projection_formal.py",
+      "sha256": "46a846c7b39977390ee2fd6a4b03f9b1e77b16aed4eb18e7f7310842436f919e",
+      "selected_symbols": [
+        "sha",
+        "tensor_save",
+        "log"
+      ]
+    },
+    {
+      "source_file": "run_traffic_module_duration_v1.py",
+      "sha256": "01cf62d76ee7a02bf8cf540f0ed19f47457d0e0635ceae511a3871db642308e9",
+      "selected_symbols": [
+        "tree_sha",
+        "exact_equal",
+        "capture_rng",
+        "restore_rng"
+      ]
+    },
+    {
+      "source_file": "run_normmatched_projection_micro.py",
+      "sha256": "4e371076acd9a770f0385c97c206414d49edaa98387adf9392d8889bb3f0e2f2",
+      "selected_symbols": [
+        "energy",
+        "project",
+        "match"
+      ]
+    },
+    {
+      "source_file": "run_projection_mechanism_batch.py",
+      "sha256": "8bca930bd36b956bf5ce150bf5d7e4fca6748fb99ec50e85c7a8f237dd18cfd0",
+      "selected_symbols": [
+        "dot",
+        "pool",
+        "mgda_weights"
+      ]
+    },
+    {
+      "source_file": "run_projection_formal.py",
+      "sha256": "46a846c7b39977390ee2fd6a4b03f9b1e77b16aed4eb18e7f7310842436f919e",
+      "selected_symbols": [
+        "server_aggregate"
+      ]
+    },
+    {
+      "source_file": "capta_c5h2_full_v1.py",
+      "sha256": "d5cbd4998efed605692b4baa4d3be8efa2c8135febba2826adb0a71830456721",
+      "selected_symbols": "all production functions before synthetic_smoke; only identity and manifest path integration changed"
+    },
+    {
+      "source_file": "models.py",
+      "sha256": "f7eb91f872be71fdab19773d1525629357ea2b0d04b9f204c350566bc87381aa",
+      "selected_symbols": "all; import relocation only"
+    }
+  ],
+  "integration_changes": [
+    "package-relative imports",
+    "new public source/config identity instead of historical infrastructure freeze",
+    "configurable data root",
+    "unused graph artifact hash no longer required; graph never consumed by CAPTA",
+    "historical launch/supervisor/synthetic entry points excluded"
+  ],
+  "algorithm_budget_and_evaluation_changed": false,
+  "configuration_sources": [
+    {
+      "source_file": "configs/capta_c5h2_final_v1.json",
+      "sha256": "c18e7edecd8164068aea8e003c5de593b39a68b4080dbd88f2db0c1bd28c25b6",
+      "change": "keep the production numerical settings; omit historical orchestration descriptions"
+    },
+    {
+      "source_file": "configs/dataset.json",
+      "sha256": "4def1f2016137e73f7596dea4001b5a577b039eff6dbce16dc2bf1128f7d6795",
+      "change": "relocatable ../data root; retain exact series shapes/channels/SHA; omit unused adjacency metadata"
+    }
+  ]
+}
