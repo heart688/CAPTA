@@ -1,4 +1,6 @@
-# Experiment setting
+# Experiment settings
+
+[Back to README](../README.md)
 
 Each city is a logical client. A run uses the target city and the other three source cities; raw samples, private residual parameters, and optimizer states remain client-local. The current implementation simulates these clients in one process.
 
@@ -43,3 +45,32 @@ H1/H3/H6 correspond to 5/15/30 minutes for LA/BAY and 10/30/60 minutes for Cheng
 ## Scope
 
 The public entry point reproduces this fixed CAPTA protocol and its source-loss, shared FedAvg, Off, local-context, and support controls. It does not reproduce the additional paper-completion schedules, standalone Target-only, full-model standard baselines, or official native pFedCTP runs. Those algorithms have distinct settings and must not be described as the same CAPTA protocol.
+
+### Optional controls
+
+The README focuses on the main CAPTA run. The existing entry point also supports the following matched controls, using paired seeds 0/1:
+
+```bash
+# Right-aligned half support: [432, 864), with a fresh model and optimizer.
+python main.py --target shenzhen --seed 0 --support half
+
+# Source objectives; target updates remain ordinary L1.
+python main.py --target shenzhen --seed 0 --source-loss ordinary
+python main.py --target shenzhen --seed 0 --source-loss c5
+
+# Shared FedAvg and zero local-context controls.
+python main.py --target shenzhen --seed 0 --aggregation fedavg
+python main.py --target shenzhen --seed 0 --context zero
+```
+
+`--aggregation off` removes the source correction but still executes source training; it is not Target-only.
+
+## Release notes
+
+The model and training implementation were repackaged from the experimental code. [source_provenance.json](source_provenance.json) records the extraction and integration changes; this repository is not a byte-identical historical launch environment. Server access records, datasets, checkpoints, and private experiment outputs are not distributed.
+
+The engine's elapsed time is diagnostic, not a CUDA-synchronized efficiency benchmark. Communication fields describe logical FP32 shared-parameter payloads, excluding serialization and network overhead. This release does not include the separate efficiency-measurement pipeline or native pFedCTP instrumentation.
+
+Report every seed and sample standard deviation (`ddof=1`). Do not average batch RMSE or use test scores to select settings.
+
+No project license has been selected yet. Public availability does not itself grant an open-source license; the authors need to choose one separately.
