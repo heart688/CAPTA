@@ -28,7 +28,15 @@ All four clients participate in 20 federated rounds. Each performs 2 local epoch
 
 The source objective `h2` is a nested mean: node error within each observed state and real window, then nonempty windows within the state, then nonempty states. It is not the sum of two losses. Stable/rise/fall states use the observed lookback's normalized half-window change, with threshold ±0.1; they are not ground-truth congestion labels. Target updates use ordinary normalized L1 over all six horizons.
 
-Shared source updates are normalized and combined by simplex minimum-norm weighting. Within each functional block, their target-collinear component is removed, then energy is matched to the raw source-mean complementary component. The server update is `anchor + target_delta + 0.6 * source_correction`. Private residual weights and their scales are never aggregated.
+Shared source updates are normalized and combined by simplex minimum-norm weighting. Within each functional block, only the component parallel and opposite to the target update is removed. Same-direction parallel and orthogonal components are retained:
+
+```text
+source_safe = source - min(dot(source, target) / dot(target, target), 0) * target
+```
+
+The dot products cover every shared tensor in that functional block, not individual parameters or the entire model at once. When the target block is zero, the source block is unchanged because no target direction is defined.
+
+The retained candidate is then positively rescaled to match the energy of the same-round raw source arithmetic mean after the same negative-parallel filter. This preserves the candidate's retained direction, not its original magnitude. A zero candidate stays zero; if its reference is nonzero, the audit explicitly records the unmatched reference rather than inventing a direction. The server update remains `anchor + target_delta + 0.6 * source_correction`. Private residual weights and their scales are never aggregated.
 
 ## Calibration and final adaptation
 
@@ -67,7 +75,9 @@ python main.py --target shenzhen --seed 0 --context zero
 
 ## Release notes
 
-The model and training implementation were repackaged from the experimental code. [source_provenance.json](source_provenance.json) records the extraction and integration changes; this repository is not a byte-identical historical launch environment. Server access records, datasets, checkpoints, and private experiment outputs are not distributed.
+The model and training implementation were repackaged from the experimental code. [source_provenance.json](source_provenance.json) records the extraction, integration changes, and subsequent aggregation revision; this repository is not a byte-identical historical launch environment. Server access records, datasets, checkpoints, and private experiment outputs are not distributed.
+
+**Aggregation revision (2026-10-16):** the current rule is `remove_negative_parallel_v1`. The initial public release removed the full parallel component, including positive alignment. This revision retains positive alignment and perpendicular components, removing only negative alignment; execution and geometry audits use the same revised rule. Existing historical results have not been rerun or relabeled as results of this revision. Code hashes prevent old checkpoints/results from being reused under the new implementation; use a fresh output directory for any future revised run.
 
 The engine's elapsed time is diagnostic, not a CUDA-synchronized efficiency benchmark. Communication fields describe logical FP32 shared-parameter payloads, excluding serialization and network overhead. This release does not include the separate efficiency-measurement pipeline or native pFedCTP instrumentation.
 

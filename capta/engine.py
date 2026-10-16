@@ -1,7 +1,8 @@
 """CAPTA training engine extracted from the final full-trajectory implementation.
 
-Scientific update, calibration, adaptation and evaluation bodies are preserved.
-Only imports, release identity and configurable data paths are repackaged.
+Calibration, adaptation and evaluation bodies are preserved. Shared aggregation
+retains aligned/orthogonal components and removes only conflicting parallel ones;
+this differs from the initial public release's orthogonal-only rule.
 """
 from __future__ import annotations
 import copy
@@ -447,16 +448,16 @@ def server_aggregate(shared, updates, cfg):
     source_order = [c for c in CITIES if c != cfg["target"]]
     if cfg["aggregation"] == "tra":
         new, audit = original.server_aggregate(shared, [updates[c] for c in source_order], updates[cfg["target"]], cfg)
-        audit.update(aggregation="tra", reference="CURRENT arm same-round nonunit source arithmetic mean FULL",
+        audit.update(aggregation="tra", reference="CURRENT arm same-round nonunit source arithmetic mean, negative parallel removed",
                      reference_shadow_ordinary_bank_generated=False, numeric_energy_identical_between_arms_claimed=False)
         keys = list(shared)
         blocks = [[key for key in keys if original.group(key) == name] for name in audit["groups"]]
         sources = [updates[c] for c in source_order]
         target = updates[cfg["target"]]
         uniform = {key: sum(source[key] for source in sources) / 3 for key in keys}
-        _, reference = original.project(uniform, target, blocks)
+        reference = original.remove_conflicting_parallel(uniform, target, blocks)
         weighted, _ = original.mgda_weights(sources, keys)
-        _, candidate = original.project(weighted, target, blocks)
+        candidate = original.remove_conflicting_parallel(weighted, target, blocks)
         correction, _ = original.match(candidate, reference, blocks)
         # Read-only scalar geometry; does not modify the executed aggregation.
         audit["block_geometry"] = {}
@@ -466,10 +467,12 @@ def server_aggregate(shared, updates, cfg):
                 "source_target_dots": [original.dot(source, target, block) for source in sources],
                 "target_squared_norm": original.energy(target, block),
                 "raw_uniform_squared_norm": original.energy(uniform, block),
-                "uniform_FULL_reference_squared_norm": original.energy(reference, block),
+                "nonconflicting_reference_squared_norm": original.energy(reference, block),
                 "actual_uniform_raw_energy": original.energy(uniform, block),
-                "actual_uniform_FULL_reference_energy": original.energy(reference, block),
-                "actual_candidate_FULL_energy": original.energy(candidate, block),
+                "actual_nonconflicting_reference_energy": original.energy(reference, block),
+                "actual_nonconflicting_candidate_energy": original.energy(candidate, block),
+                "candidate_target_dot": original.dot(candidate, target, block),
+                "matched_correction_target_dot": original.dot(correction, target, block),
                 "actual_matched_correction_energy": original.energy(correction, block)}
         audit["geometry_audit_deterministically_recomputed_from_identical_uploaded_deltas"] = True
     elif cfg["aggregation"] == "fedavg":

@@ -137,7 +137,18 @@
     "unused graph artifact hash no longer required; graph never consumed by CAPTA",
     "historical launch/supervisor/synthetic entry points excluded"
   ],
-  "algorithm_budget_and_evaluation_changed": false,
+  "algorithm_budget_and_evaluation_changed": true,
+  "release_revisions": [
+    {
+      "date": "2026-10-16",
+      "rule": "remove_negative_parallel_v1",
+      "algorithm_changed": true,
+      "budget_changed": false,
+      "evaluation_changed": false,
+      "change": "Retain same-direction parallel and orthogonal source-update components; remove only negative target-parallel components per functional block. Apply the same filter to the raw source-mean energy reference and the geometry audit. Preserve zero candidates without inventing directions; explicitly report unmatched nonzero references.",
+      "historical_results_rerun_or_relabeled": false
+    }
+  ],
   "configuration_sources": [
     {
       "source_file": "configs/capta_c5h2_final_v1.json",

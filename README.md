@@ -14,6 +14,8 @@ PyTorch implementation of the CAPTA model and training protocol.
 
 CAPTA transfers knowledge from data-rich source cities to a target city with limited observations, without requiring an adjacency matrix. This repository contains the main model, training and evaluation code, and experiment configurations. Datasets, checkpoints, experiment outputs, and external baselines are not included.
 
+Source aggregation retains components aligned with or perpendicular to the target update and removes only the oppositely aligned parallel component. See [aggregation details and version notes](docs/settings.md#training).
+
 ## Installation
 
 Use **Python 3.10**, **PyTorch 2.1.2**, and **NumPy 1.26.4**. Training is intended for Linux with an NVIDIA GPU.

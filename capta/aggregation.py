@@ -1,4 +1,4 @@
-"""Target-complementary shared-update aggregation."""
+"""Shared aggregation retaining aligned and orthogonal source components."""
 import numpy as np
 import torch
 from .utils import group, is_shared
@@ -9,29 +9,57 @@ def energy(delta, keys=None):
 
 
 def project(source, target, groups):
+    """Split each block into target-parallel and orthogonal components.
+
+    A zero target block defines no direction, so its parallel component is zero.
+    This decomposition itself does not decide which component to discard.
+    """
     parallel = {}
     for keys in groups:
         den = energy(target, keys)
-        assert den > 1e-20, 'Cannot identify target direction for a zero block'
         dot = sum(float((source[k].double() * target[k].double()).sum()) for k in keys)
         for k in keys:
-            parallel[k] = dot / den * target[k]
+            parallel[k] = dot / den * target[k] if den > 0 else torch.zeros_like(source[k])
     orth = {k: source[k] - parallel[k] for k in source}
     return parallel, orth
 
 
+def remove_conflicting_parallel(source, target, groups):
+    """Remove only negative target-parallel components, block by block.
+
+    s_safe = s - min(<s,t> / ||t||^2, 0) * t.
+    Positive parallel and orthogonal components are retained. With t=0 the
+    source block is unchanged. Inputs are never modified in place.
+    """
+    retained = {}
+    for block in groups:
+        den = energy(target, block)
+        coefficient = min(dot(source, target, block) / den, 0.) if den > 0 else 0.
+        for k in block:
+            retained[k] = source[k] - coefficient * target[k] if coefficient < 0 else source[k].clone()
+    return retained
+
+
 def match(delta, reference, groups):
-    result, scales = {}, []
+    result, scales, statuses, errors = {}, [], [], []
     for keys in groups:
         den, wanted = energy(delta, keys), energy(reference, keys)
-        assert den > 1e-20 and wanted > 1e-20
-        scale = (wanted / den) ** .5
+        # A fully rejected source correction has no direction to rescale.
+        # Keep it zero rather than resurrecting a conflicting update.
+        scale = (wanted / den) ** .5 if den > 0 else 0.
         scales.append(scale)
+        status = "matched" if den > 0 else "zero_candidate" if wanted == 0 else "zero_candidate_unmatched_reference"
+        statuses.append(status)
         for k in keys:
             result[k] = delta[k] * scale
-    error = max(abs(energy(result, keys) / energy(reference, keys) - 1.) for keys in groups)
-    assert error < 1e-6, error
-    return result, dict(scales=scales, max_relative_energy_error=error)
+        actual = energy(result, keys)
+        error = abs(actual / wanted - 1.) if wanted > 0 else actual
+        errors.append(error)
+        if status != "zero_candidate_unmatched_reference":
+            assert error < 1e-6, error
+    return result, dict(scales=scales, block_statuses=statuses,
+                        all_blocks_matched=all(e < 1e-6 for e in errors),
+                        max_relative_energy_error=max(errors))
 
 def dot(a, b, keys):
     return sum(float((a[k].double()*b[k].double()).sum()) for k in keys)
@@ -79,16 +107,19 @@ def server_aggregate(shared, source_updates, target_update, cfg):
     blocks = [[k for k in keys if group(k) == g] for g in groups]
     uniform = {k: sum(v[k] for v in source_updates)/3 for k in keys}
     weighted, simplex = mgda_weights(source_updates, keys)
-    _, reference = project(uniform, target_update, blocks)
-    _, removed = project(weighted, target_update, blocks)
-    correction, energy_audit = match(removed, reference, blocks)
-    orth_error = max(abs(dot(correction, target_update, block))/max(
-        (energy(correction, block)*energy(target_update, block))**.5, 1e-20) for block in blocks)
-    assert orth_error < 1e-5
+    reference = remove_conflicting_parallel(uniform, target_update, blocks)
+    candidate = remove_conflicting_parallel(weighted, target_update, blocks)
+    correction, energy_audit = match(candidate, reference, blocks)
+    cosines = [dot(correction, target_update, block)/max(
+        (energy(correction, block)*energy(target_update, block))**.5, 1e-20) for block in blocks]
+    conflict_error = max(max(-cosine, 0.) for cosine in cosines)
+    assert conflict_error < 1e-5
     state = {k: shared[k]+target_update[k]+cfg["beta"]*correction[k] for k in keys}
     assert all(torch.isfinite(v).all() for v in state.values())
     return state, {"simplex": simplex, "energy": energy_audit,
-                   "orthogonality_relative_error": orth_error,
+                   "projection_rule": "remove_negative_parallel_v1",
+                   "nonconflict_relative_error": conflict_error,
+                   "correction_target_cosines": dict(zip(groups, cosines)),
                    "groups": groups, "source_order": [c for c in CITIES if c != cfg["target"]],
                    "target_squared_norm": energy(target_update, keys),
                    "correction_squared_norm": energy(correction, keys)}

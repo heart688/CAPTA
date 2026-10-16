@@ -91,17 +91,18 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual({int(v["step"]) for v in opt.state.values()},{4})
             self.assertTrue(all(is_shared(k,"full_private") for k in client.shared))
 
-    def test_server_private_rejection_and_complementarity(self):
+    def test_server_private_rejection_and_nonconflict(self):
         keys=("history_embed.0.weight","blocks.0.out.weight","head.weight")
         torch.manual_seed(4)
         anchor={k:torch.zeros(11) for k in keys}
         target={k:torch.randn(11) for k in keys}
         sources=[{k:torch.randn(11) for k in keys} for _ in range(3)]
         result,audit=server_aggregate(anchor,sources,target,{"target":"shenzhen","beta":.6})
-        self.assertLess(audit["orthogonality_relative_error"],1e-5)
+        self.assertLess(audit["nonconflict_relative_error"],1e-5)
+        self.assertEqual(audit["projection_rule"], "remove_negative_parallel_v1")
         for k in keys:
             self.assertTrue(torch.isfinite(result[k]).all())
-            self.assertAlmostEqual(float(((result[k]-target[k])*target[k]).sum()),0,places=5)
+            self.assertGreaterEqual(float(((result[k]-target[k])*target[k]).sum()),-1e-5)
         with self.assertRaises(AssertionError):
             server_aggregate({"blocks.0.private.weight":torch.zeros(2)},[],{}, {"target":"shenzhen","beta":.6})
 
