@@ -22,9 +22,9 @@ This repository provides the main CAPTA model and its default training and evalu
 
 Use **Python 3.10**, **PyTorch 2.1.2**, and **NumPy 1.26.4**. Training is intended for Linux with an NVIDIA GPU.
 
+Download the repository as a ZIP archive from the anonymous code link provided in the submission and extract it. Open a terminal in the extracted source directory, then run:
+
 ```bash
-git clone https://github.com/heart688/CAPTA.git
-cd CAPTA
 conda create -n capta python=3.10
 conda activate capta
 pip install -r requirements.txt
