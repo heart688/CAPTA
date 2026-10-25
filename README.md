@@ -2,7 +2,7 @@
 
 # CAPTA
 
-**Graph-free cross-city traffic forecasting**
+**Federated cross-city few-shot traffic forecasting**
 
 PyTorch implementation of the CAPTA model and training protocol.
 
@@ -12,9 +12,11 @@ PyTorch implementation of the CAPTA model and training protocol.
 
 ## Overview
 
-CAPTA (Composition-Aware Personalized Traffic Adaptation) transfers knowledge from data-rich source cities to a target city with limited observations, without requiring an adjacency matrix. This release contains the main CAPTA model, its training and evaluation pipeline, and the default configuration.
+CAPTA (Composition-Aware Personalized Traffic Adaptation) is a personalized federated transfer framework for cross-city few-shot traffic forecasting. It transfers knowledge from data-rich source cities to a target city with limited observations while keeping traffic records and city-private parameters local.
 
-TEB balances traffic states and real observation windows during source training. TCA preserves the target update, retains aligned and perpendicular source components, and removes only opposing parallel components. See [training details](docs/settings.md#federated-training).
+Traffic Experience Balancing (TEB) balances traffic states and real observation windows during source training. Target-Complementary Aggregation (TCA) uses the few-shot target update as a reference: it preserves the target update, retains aligned and perpendicular source components, and removes opposing parallel components. City-private residuals provide local calibration. See [training details](docs/settings.md#federated-training).
+
+This repository provides the main CAPTA model and its default training and evaluation pipeline, including target calibration and final adaptation.
 
 ## Installation
 
@@ -47,7 +49,7 @@ data/
 └── shenzhen/dataset.npy
 ```
 
-Each array has shape `[time, node, 2]`: traffic speed and time-of-day. CAPTA does not load a road graph. The [dataset manifest](configs/dataset.json) specifies shapes, channels, and checksums for the experimental arrays.
+Each array has shape `[time, node, 2]`: traffic speed and time-of-day. The [dataset manifest](configs/dataset.json) specifies shapes, channels, and checksums for the experimental arrays.
 
 ## Quick start
 
