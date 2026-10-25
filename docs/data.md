@@ -23,7 +23,7 @@ data/
   shenzhen/dataset.npy
 ```
 
-Arrays are `[time, node, channel]`, with channel 0 = speed in the original unit and channel 1 = normalized time-of-day in `[0,1)`. The loader generates day-of-week from chronological steps when `time_index_channel` is null. The calendar channels are retained for input-format compatibility; CAPTA's calendar embedding is zero.
+Arrays are `[time, node, channel]`, with channel 0 = speed in the original unit and channel 1 = normalized time-of-day in `[0,1)`. The loader generates day-of-week from chronological steps when `time_index_channel` is null. The calendar channels are retained for input-format compatibility; the main CAPTA model uses only the speed channel and has no calendar embedding.
 
 The experimental arrays have shapes `[34272,207,2]`, `[52116,325,2]`, `[17280,524,2]`, and `[17280,627,2]` respectively. Their exact processed-series hashes are in [configs/dataset.json](../configs/dataset.json). The shape/channel/hash manifest refers to these processed arrays, not to arbitrary provider downloads. An array with another preprocessing convention is a new data setting, not an exact reproduction.
 

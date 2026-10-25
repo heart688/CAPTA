@@ -12,7 +12,7 @@ PyTorch implementation of the CAPTA model and training protocol.
 
 ## Overview
 
-CAPTA transfers knowledge from data-rich source cities to a target city with limited observations, without requiring an adjacency matrix. This release contains the main CAPTA model, its training and evaluation pipeline, and the default configuration.
+CAPTA (Composition-Aware Personalized Traffic Adaptation) transfers knowledge from data-rich source cities to a target city with limited observations, without requiring an adjacency matrix. This release contains the main CAPTA model, its training and evaluation pipeline, and the default configuration.
 
 TEB balances traffic states and real observation windows during source training. TCA preserves the target update, retains aligned and perpendicular source components, and removes only opposing parallel components. See [training details](docs/settings.md#federated-training).
 
@@ -86,6 +86,8 @@ These use synthetic inputs only and do not start a traffic experiment.
 - [docs/settings.md](docs/settings.md): data splits, optimization, adaptation, and evaluation details.
 
 The default protocol uses a **12-step lookback**, **6-step forecast**, **20 federated rounds × 2 local epochs**, and **50 final target-adaptation epochs**. Evaluation reports unmasked MAE and RMSE at H1/H3/H6 in original speed units.
+
+Each target supplies **864 support steps**: 3 days for METR-LA/PEMS-BAY or 6 days for Chengdu/Shenzhen. The other three cities use the first 80% of their observations for source training; evaluation uses the target's chronological last 20%.
 
 ## Repository structure
 
