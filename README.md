@@ -12,9 +12,9 @@ PyTorch implementation of the CAPTA model and training protocol.
 
 ## Overview
 
-CAPTA transfers knowledge from data-rich source cities to a target city with limited observations, without requiring an adjacency matrix. This repository contains the main model, training and evaluation code, and experiment configurations. Datasets, checkpoints, experiment outputs, and external baselines are not included.
+CAPTA transfers knowledge from data-rich source cities to a target city with limited observations, without requiring an adjacency matrix. This release contains the main CAPTA model, its training and evaluation pipeline, and the default configuration.
 
-Source aggregation retains components aligned with or perpendicular to the target update and removes only the oppositely aligned parallel component. See [aggregation details and version notes](docs/settings.md#training).
+TEB balances traffic states and real observation windows during source training. TCA preserves the target update, retains aligned and perpendicular source components, and removes only opposing parallel components. See [training details](docs/settings.md#federated-training).
 
 ## Installation
 
@@ -103,8 +103,6 @@ CAPTA/
 ├── setting.py         # Configuration loading and validation
 └── requirements.txt
 ```
-
-This is a standalone code release, not the historical server environment. Source provenance and reporting boundaries are documented in [docs/settings.md](docs/settings.md#release-notes).
 
 ## Citation
 

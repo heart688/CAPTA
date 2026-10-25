@@ -1,9 +1,4 @@
-"""CAPTA training engine extracted from the final full-trajectory implementation.
-
-Calibration, adaptation and evaluation bodies are preserved. Shared aggregation
-retains aligned/orthogonal components and removes only conflicting parallel ones;
-this differs from the initial public release's orthogonal-only rule.
-"""
+"""Main CAPTA federated training, target calibration, adaptation and evaluation."""
 from __future__ import annotations
 import copy
 import fcntl
@@ -24,8 +19,8 @@ DATASET_MANIFEST = ROOT / 'configs/dataset.json'
 DATA_ROOT = None
 CITIES = original.CITIES
 STATES = ('stable', 'rise', 'fall')
-SOURCE_MODES = ('ordinary', 'c5', 'h2', 'random_c5', 'pseudo_h2')
-JOB_FIELDS = ('job_id', 'stage', 'source_mode', 'aggregation', 'seed', 'city', 'support_fraction', 'context')
+SOURCE_MODES = ('ordinary', 'h2')
+JOB_FIELDS = ('job_id', 'seed', 'city')
 sha, save, log = original.sha, original.save, original.log
 tree_sha, capture_rng, restore_rng = state_tools.tree_sha, state_tools.capture_rng, state_tools.restore_rng
 exact_equal = state_tools.exact_equal
@@ -44,9 +39,7 @@ def json_digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
-def identity(config_path, job, contract_path=None):
-    if contract_path is not None:
-        raise ValueError("Private historical freeze contracts are not used by this public release")
+def identity(config_path, job):
     paths = sorted((ROOT / 'capta').rglob('*.py')) + [ROOT / 'main.py', Path(config_path), DATASET_MANIFEST]
     hashes = {str(p.relative_to(ROOT)) if p.is_relative_to(ROOT) else p.name: sha(p) for p in paths}
     hashes['scientific_job'] = json_digest({key: job[key] for key in JOB_FIELDS})
@@ -55,18 +48,14 @@ def identity(config_path, job, contract_path=None):
 
 def job_config(base, job):
     assert all(key in job for key in JOB_FIELDS)
-    assert job["source_mode"] in SOURCE_MODES and job["aggregation"] in ("tra", "fedavg", "off")
-    assert job["context"] in ("local", "zero") and job["city"] in CITIES
-    assert job["seed"] in range(5) and job["support_fraction"] in (1., .5)
+    assert job["city"] in CITIES and job["seed"] in range(5)
     cfg = copy.deepcopy(base)
-    cfg.update(seed=job["seed"], target=job["city"], source_loss=job["source_mode"],
-               aggregation=job["aggregation"], private_context_mode=job["context"],
-               support_fraction=job["support_fraction"], scientific_job={k: job[k] for k in JOB_FIELDS})
-    cfg["support_start"] = 0 if job["support_fraction"] == 1. else 432
+    cfg.update(seed=job["seed"], target=job["city"], scientific_job={k: job[k] for k in JOB_FIELDS})
+    cfg["support_start"] = 0
     cfg["support_end"] = 864
-    cfg["support_steps"] = 864 - cfg["support_start"]
-    cfg["support_fit_end"] = 432 if job["support_fraction"] == 1. else 648
-    cfg["support_gate_end"] = 648 if job["support_fraction"] == 1. else 756
+    cfg["support_steps"] = 864
+    cfg["support_fit_end"] = 432
+    cfg["support_gate_end"] = 648
     validate_config(cfg)
     return cfg
 
@@ -74,8 +63,8 @@ def job_config(base, job):
 def validate_config(cfg, synthetic=False):
     assert cfg.get("candidate", "trend_innovation") == "trend_innovation"
     assert cfg["backbone"] == "no_calendar_residual" and (cfg["history"], cfg["horizon"]) == (12, 6)
-    assert cfg["source_loss"] in SOURCE_MODES and cfg["aggregation"] in ("tra", "fedavg", "off")
-    assert cfg["private_context_mode"] in ("local", "zero")
+    assert cfg["source_loss"] == "h2" and cfg["aggregation"] == "tra"
+    assert cfg["private_context_mode"] == "local"
     assert cfg["seed"] in range(5) and cfg["target"] in CITIES
     assert cfg["local_lr"] == .001 and cfg["weight_decay"] == .0001 and cfg["clip_grad_norm"] == 5.
     assert cfg["local_batch_size"] == 32 and cfg["local_epochs"] == 2
@@ -85,24 +74,13 @@ def validate_config(cfg, synthetic=False):
     assert cfg["local_response_scale"] == .3
     if not synthetic:
         assert (cfg["rounds"], cfg["calibration_epochs"], cfg["target_epochs"]) == (20, 5, 50)
-        assert cfg["support_end"] == 864 and cfg["support_start"] in (0, 432)
-        assert (cfg["support_fit_end"], cfg["support_gate_end"]) == ((432, 648) if cfg["support_start"] == 0 else (648, 756))
+        assert (cfg["support_start"], cfg["support_fit_end"], cfg["support_gate_end"], cfg["support_end"]) == (0, 432, 648, 864)
 
 
 def build_model(cfg, device="cuda"):
     model = build_candidate("trend_innovation", horizon=cfg["horizon"]).to(device)
     hook = model._client_candidate_hook
     assert hook.recipe == "trend_innovation"
-    # The existing hook still observes x and computes context; this additional
-    # pre-hook zeroes ONLY the existing private-context slot, on every path.
-    model._zero_context_calls = 0
-    if cfg["private_context_mode"] == "zero":
-        def zero_slot(module, args):
-            z = args[0]
-            assert z.shape[-1] == 256
-            model._zero_context_calls += 1
-            return (torch.cat((z[..., :128], torch.zeros_like(z[..., 128:])), -1), *args[1:])
-        model._zero_context_handles = [block.private.register_forward_pre_hook(zero_slot) for block in model.blocks]
     return model
 
 
@@ -139,33 +117,7 @@ def _finite_optimizer(opt):
         assert all(not isinstance(tensor, torch.Tensor) or bool(torch.isfinite(tensor).all()) for tensor in value.values())
 
 
-def _null_labels(membership, mode, generator):
-    batch, nodes = membership.shape[:2]
-    true = membership.argmax(-1)
-    permutations = []
-    if mode == "random_c5":
-        permutation = torch.randperm(batch * nodes, generator=generator)
-        assigned = true.reshape(-1)[permutation.to(true.device)].reshape_as(true)
-        permutations.append(tree_sha(permutation))
-        return assigned, permutations
-    assigned = torch.arange(batch, device=membership.device).unsqueeze(1).expand(batch, nodes).clone()
-    if mode == "pseudo_h2":
-        counts = membership.sum(1).long().cpu().numpy()
-        for state in range(3):
-            positions = torch.nonzero(membership[..., state].reshape(-1).bool(), as_tuple=False).flatten()
-            permutation = torch.randperm(len(positions), generator=generator)
-            randomized = positions[permutation.to(positions.device)]
-            offset = 0
-            for window in range(batch):
-                count = int(counts[window, state])
-                assigned.reshape(-1)[randomized[offset:offset + count]] = window
-                offset += count
-            assert offset == len(positions)
-            permutations.append(tree_sha(permutation))
-    return assigned, permutations
-
-
-def source_objective(prediction, truth, x, mode, generator):
+def source_objective(prediction, truth, x, mode):
     """Exact original FP32 mean order; compact independent FP64 audits.
 
     No micro-config assertion is bypassed. State/bin loss uses the actual B
@@ -182,61 +134,44 @@ def source_objective(prediction, truth, x, mode, generator):
     real_counts = np.stack([(observed_cpu == state).sum(1) for state in range(3)])
     group_counts = real_counts.sum(1)
     coefficients = np.zeros((batch, nodes), dtype=np.float64)
-    assigned, permutation_digests = _null_labels(membership, mode, generator)
-    assigned_cpu = assigned.detach().cpu().numpy()
+    window_ids = torch.arange(batch, device=membership.device).unsqueeze(1).expand(batch, nodes).clone()
+    window_ids_cpu = window_ids.detach().cpu().numpy()
     bins_counts, bins_sums, pieces = [], [], []
     if mode == "ordinary":
         loss = error.abs().mean()
         coefficients.fill(1. / (batch * nodes))
-    elif mode in ("c5", "random_c5"):
-        labels = observed if mode == "c5" else assigned
-        labels_cpu = observed_cpu if mode == "c5" else assigned_cpu
-        counts = np.bincount(labels_cpu.reshape(-1), minlength=3)
-        present = int((counts > 0).sum())
-        for state in range(3):
-            if counts[state]:
-                pieces.append(node_error[labels == state].mean())
-                coefficients[labels_cpu == state] = 1. / (present * counts[state])
-        loss = torch.stack(pieces).mean()
-        assert np.array_equal(counts, group_counts)
     else:
         present_states = int((group_counts > 0).sum())
         for state in range(3):
-            masks = [(membership[..., state].bool() & (assigned == window)) for window in range(batch)]
-            counts = [int(np.sum((observed_cpu == state) & (assigned_cpu == window))) for window in range(batch)]
+            masks = [(membership[..., state].bool() & (window_ids == window)) for window in range(batch)]
+            counts = [int(np.sum((observed_cpu == state) & (window_ids_cpu == window))) for window in range(batch)]
             bins_counts.append(counts)
-            bins_sums.append([float(values[(observed_cpu == state) & (assigned_cpu == window)].sum()) for window in range(batch)])
+            bins_sums.append([float(values[(observed_cpu == state) & (window_ids_cpu == window)].sum()) for window in range(batch)])
             nonempty = [index for index, count in enumerate(counts) if count]
             if nonempty:
                 pieces.append(torch.stack([node_error[masks[index]].mean() for index in nonempty]).mean())
                 for index in nonempty:
-                    coefficients[(observed_cpu == state) & (assigned_cpu == index)] = 1. / (present_states * len(nonempty) * counts[index])
+                    coefficients[(observed_cpu == state) & (window_ids_cpu == index)] = 1. / (present_states * len(nonempty) * counts[index])
         loss = torch.stack(pieces).mean()
         assert bins_counts == real_counts.tolist()
     present_count = int((group_counts > 0).sum())
-    assigned_counts = group_counts if mode != "random_c5" else np.bincount(assigned_cpu.reshape(-1), minlength=3)
-    contingency = [[int(np.sum((observed_cpu == a) & (assigned_cpu == b))) for b in range(3)] for a in range(3)] if mode == "random_c5" else None
     reconstructed = float((values * coefficients).sum())
     assert bool(torch.isfinite(loss)) and abs(float(coefficients.sum()) - 1.) < 1e-10
     audit = {"mode": mode, "actual_batch_size": batch, "nodes": nodes, "present_state_count": present_count,
-             "observed_state_counts": group_counts.tolist(), "assigned_state_counts": assigned_counts.tolist(),
+             "observed_state_counts": group_counts.tolist(),
              "real_window_state_counts": real_counts.tolist(), "bin_counts_by_state": bins_counts,
              "bin_node_error_sums_by_state": bins_sums,
              "observed_group_node_error_sums": [float(values[observed_cpu == state].sum()) for state in range(3)],
-             "assigned_group_node_error_sums": [float(values[assigned_cpu == state].sum()) for state in range(3)] if mode == "random_c5" else [],
-             "true_assigned_contingency_counts": contingency,
              "observed_group_weight_mass": [float(coefficients[observed_cpu == state].sum()) for state in range(3)],
              "observed_window_group_weight_mass": [[float(coefficients[w][observed_cpu[w] == state].sum()) for w in range(batch)] for state in range(3)],
              "normalized_weight_sum": float(coefficients.sum()), "effective_sample_size": 1. / float(np.square(np.sort(coefficients.reshape(-1))).sum()),
              "coefficient_multiset_sha256": tree_sha(np.sort(coefficients.reshape(-1))),
-             "observed_membership_sha256": tree_sha(membership), "assigned_labels_sha256": tree_sha(assigned),
-             "permutation_sha256": permutation_digests, "prediction_loss": float(loss.detach()),
+             "observed_membership_sha256": tree_sha(membership), "prediction_loss": float(loss.detach()),
              "reconstructed_loss_from_detached_errors": reconstructed,
              "loss_reconstruction_absolute_error": abs(float(loss.detach()) - reconstructed),
              "state_labels_observed_only": True, "future_labels_not_grouping_inputs": True,
              "empty_states_and_windows_skipped": True,
-             "source_shared_and_private_joint_gradients": True,
-             "independent_random_stream_does_not_consume_model_rng": True}
+             "source_shared_and_private_joint_gradients": True}
     return loss, audit
 
 
@@ -251,7 +186,7 @@ class StreamingLossAudit:
                     "window_weight_mass_exact_min": [None, None, None], "window_weight_mass_exact_max": [None, None, None],
                     "window_weight_mass_histogram_rule": "floor(100*mass), clamped to bins0..100; display only, loss unchanged",
                     "ESS_sum": 0., "ESS_min": None, "ESS_max": None, "max_loss_reconstruction_absolute_error": 0.,
-                    "count_preservation_violations": 0, "weight_normalization_violations": 0,
+                    "weight_normalization_violations": 0,
                     "first_batch": None, "last_batch": None, "epoch_visits": []}
         self.digest = hashlib.sha256()
         self.input_digest = hashlib.sha256()
@@ -292,7 +227,6 @@ class StreamingLossAudit:
         r["ESS_min"] = ess if r["ESS_min"] is None else min(r["ESS_min"], ess)
         r["ESS_max"] = ess if r["ESS_max"] is None else max(r["ESS_max"], ess)
         r["max_loss_reconstruction_absolute_error"] = max(r["max_loss_reconstruction_absolute_error"], audit["loss_reconstruction_absolute_error"])
-        r["count_preservation_violations"] += int(audit["observed_state_counts"] != audit["assigned_state_counts"])
         r["weight_normalization_violations"] += int(abs(audit["normalized_weight_sum"] - 1.) > 1e-10)
         if r["first_batch"] is None: r["first_batch"] = audit
         r["last_batch"] = audit
@@ -341,7 +275,6 @@ class Client:
         self.last_shared_delta = None
         self.local_rng = capture_rng()
         self.loader_state = None
-        self.null_generator_state = None
         self.position = {"round": 0, "epoch": 0, "batch": 0, "at_round_boundary": True}
 
     def broadcast(self, shared):
@@ -358,8 +291,6 @@ class Client:
         nseed = cfg["seed"] + round_id * 1000 + CITIES.index(self.city)
         original.seed(nseed)
         loader_generator = torch.Generator().manual_seed(nseed)
-        null_offset = cfg["randomization_seed_offset"]
-        null_generator = torch.Generator().manual_seed(nseed + null_offset)
         loader = DataLoader(Indexed(self.dataset), batch_size=cfg["local_batch_size"], shuffle=True, num_workers=0, generator=loader_generator)
         before_steps = _optimizer_steps(self.opt)
         before_opt_sha = tree_sha(self.opt.state_dict())
@@ -367,14 +298,13 @@ class Client:
         mode = "ordinary" if self.city == cfg["target"] else cfg["source_loss"]
         stream = StreamingLossAudit(mode, expected_windows=len(self.dataset))
         hook_calls = self.model._client_candidate_hook.calls
-        zero_calls = self.model._zero_context_calls
         self.model.train()
         for epoch in range(cfg["local_epochs"]):
             for batch, (x, y, profile, indices) in enumerate(loader):
                 x, y, profile = x.to(self.device), y.to(self.device), profile.to(self.device)
                 self.opt.zero_grad(set_to_none=True)
                 prediction = self.model(x, profile)
-                loss, audit = source_objective(prediction, y, x, mode, null_generator)
+                loss, audit = source_objective(prediction, y, x, mode)
                 loss.backward()
                 norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), cfg["clip_grad_norm"])
                 assert bool(torch.isfinite(norm))
@@ -391,14 +321,12 @@ class Client:
         delta = {k: state[k].detach().cpu().clone() - shared[k] for k in self.shared}
         assert all(v.dtype == torch.float32 and bool(torch.isfinite(v).all()) for v in delta.values())
         self.last_shared_delta = delta
-        self.local_rng, self.loader_state, self.null_generator_state = capture_rng(), loader_generator.get_state().clone(), null_generator.get_state().clone()
+        self.local_rng, self.loader_state = capture_rng(), loader_generator.get_state().clone()
         self.position = {"round": round_id, "epoch": cfg["local_epochs"], "batch": len(loader), "at_round_boundary": True}
         audit = stream.finish()
         assert audit["batches"] == expected_steps and all(v["windows"] == len(self.dataset) for v in audit["epoch_visits"])
-        assert audit["count_preservation_violations"] == audit["weight_normalization_violations"] == 0
+        assert audit["weight_normalization_violations"] == 0
         assert self.model._client_candidate_hook.calls - hook_calls == expected_steps
-        if cfg["private_context_mode"] == "zero":
-            assert self.model._zero_context_calls - zero_calls == expected_steps * len(self.model.blocks)
         return delta, {"city": self.city, "role": "target" if self.city == cfg["target"] else "source", "loss_recipe": mode,
             "loss": total / samples, "batches": expected_steps, "samples": samples, "epochs": cfg["local_epochs"],
             "elapsed_s": time.perf_counter() - started, "optimizer_persistent": True,
@@ -408,18 +336,15 @@ class Client:
             "private_broadcast_before_sha256": private_before, "private_broadcast_after_sha256": private_before,
             "private_end_sha256": tree_sha(private_state(self.model)), "model_end_sha256": tree_sha(clone_state(self.model)),
             "rng_seed": nseed, "dropout_seed": nseed, "shuffle_seed": nseed,
-            "independent_random_generator_seed": nseed + null_offset,
-            "independent_random_generator_final_sha256": tree_sha(self.null_generator_state),
             "global_rng_final_sha256": tree_sha(self.local_rng), "loader_generator_final_sha256": tree_sha(self.loader_state),
             "loss_audit": audit, "private_broadcast_unchanged": True,
-            "C2_enabled": True, "LSC_mode": cfg["private_context_mode"], "LSC_forward_calls": expected_steps,
-            "zero_LSC_private_slot_calls": self.model._zero_context_calls - zero_calls}
+            "private_context_forward_calls": expected_steps}
 
     def snapshot(self, round_id):
         return {"city": self.city, "round": round_id, "hashes": self.hashes, "model": clone_state(self.model),
             "optimizer": self.opt.state_dict(), "last_shared_delta": self.last_shared_delta,
             "rng": _numpy_rng_safe(self.local_rng), "loader_generator": self.loader_state,
-            "independent_null_generator": self.null_generator_state, "position": self.position,
+            "position": self.position,
             "requires_grad": {name: p.requires_grad for name, p in self.model.named_parameters()},
             "model_training_modes": {name: m.training for name, m in self.model.named_modules()},
             "client_private_context_is_RAM_only_not_in_state_dict": True}
@@ -432,7 +357,7 @@ class Client:
         self.opt.load_state_dict(payload["optimizer"])
         self.last_shared_delta = payload["last_shared_delta"]
         self.local_rng = _numpy_rng_decode(payload["rng"])
-        self.loader_state, self.null_generator_state, self.position = payload["loader_generator"], payload["independent_null_generator"], payload["position"]
+        self.loader_state, self.position = payload["loader_generator"], payload["position"]
         assert tree_sha(clone_state(self.model)) == tree_sha(payload["model"])
         assert tree_sha(self.opt.state_dict()) == tree_sha(payload["optimizer"])
         assert self.position["at_round_boundary"]
@@ -446,46 +371,32 @@ def server_aggregate(shared, updates, cfg):
     """Only shared tensors cross the logical server API, every round."""
     assert set(updates) == set(CITIES) and all(set(v) == set(shared) for v in updates.values())
     source_order = [c for c in CITIES if c != cfg["target"]]
-    if cfg["aggregation"] == "tra":
-        new, audit = original.server_aggregate(shared, [updates[c] for c in source_order], updates[cfg["target"]], cfg)
-        audit.update(aggregation="tra", reference="CURRENT arm same-round nonunit source arithmetic mean, negative parallel removed",
-                     reference_shadow_ordinary_bank_generated=False, numeric_energy_identical_between_arms_claimed=False)
-        keys = list(shared)
-        blocks = [[key for key in keys if original.group(key) == name] for name in audit["groups"]]
-        sources = [updates[c] for c in source_order]
-        target = updates[cfg["target"]]
-        uniform = {key: sum(source[key] for source in sources) / 3 for key in keys}
-        reference = original.remove_conflicting_parallel(uniform, target, blocks)
-        weighted, _ = original.mgda_weights(sources, keys)
-        candidate = original.remove_conflicting_parallel(weighted, target, blocks)
-        correction, _ = original.match(candidate, reference, blocks)
-        # Read-only scalar geometry; does not modify the executed aggregation.
-        audit["block_geometry"] = {}
-        for name, block in zip(audit["groups"], blocks):
-            audit["block_geometry"][name] = {
-                "raw_source_gram": [[original.dot(a, b, block) for b in sources] for a in sources],
-                "source_target_dots": [original.dot(source, target, block) for source in sources],
-                "target_squared_norm": original.energy(target, block),
-                "raw_uniform_squared_norm": original.energy(uniform, block),
-                "nonconflicting_reference_squared_norm": original.energy(reference, block),
-                "actual_uniform_raw_energy": original.energy(uniform, block),
-                "actual_nonconflicting_reference_energy": original.energy(reference, block),
-                "actual_nonconflicting_candidate_energy": original.energy(candidate, block),
-                "candidate_target_dot": original.dot(candidate, target, block),
-                "matched_correction_target_dot": original.dot(correction, target, block),
-                "actual_matched_correction_energy": original.energy(correction, block)}
-        audit["geometry_audit_deterministically_recomputed_from_identical_uploaded_deltas"] = True
-    elif cfg["aggregation"] == "fedavg":
-        average = {k: sum(updates[c][k] for c in CITIES) / 4 for k in shared}
-        new = {k: shared[k] + average[k] for k in shared}
-        audit = {"aggregation": "fedavg", "client_order": list(CITIES), "client_weights": [.25] * 4,
-                 "formula": "shared + arithmetic_mean(all four RAW shared client deltas)",
-                 "beta_applied": False, "unit_normalization_applied": False, "projection_applied": False,
-                 "energy_matching_applied": False, "target_plus_source_correction_applied": False}
-    else:
-        new = {k: shared[k] + updates[cfg["target"]][k] for k in shared}
-        audit = {"aggregation": "off", "formula": "shared + target RAW shared delta", "sources_still_trained_and_uploaded": True,
-                 "not_full_target_only_training": True, "source_correction_applied": False}
+    assert cfg["aggregation"] == "tra"
+    new, audit = original.server_aggregate(shared, [updates[c] for c in source_order], updates[cfg["target"]], cfg)
+    audit.update(aggregation="tra", reference="same-round nonunit source arithmetic mean, negative parallel removed")
+    keys = list(shared)
+    blocks = [[key for key in keys if original.group(key) == name] for name in audit["groups"]]
+    sources = [updates[c] for c in source_order]
+    target = updates[cfg["target"]]
+    uniform = {key: sum(source[key] for source in sources) / 3 for key in keys}
+    reference = original.remove_conflicting_parallel(uniform, target, blocks)
+    weighted, _ = original.mgda_weights(sources, keys)
+    candidate = original.remove_conflicting_parallel(weighted, target, blocks)
+    correction, _ = original.match(candidate, reference, blocks)
+    # Read-only scalar geometry; does not modify the executed aggregation.
+    audit["block_geometry"] = {}
+    for name, block in zip(audit["groups"], blocks):
+        audit["block_geometry"][name] = {
+            "raw_source_gram": [[original.dot(a, b, block) for b in sources] for a in sources],
+            "source_target_dots": [original.dot(source, target, block) for source in sources],
+            "target_squared_norm": original.energy(target, block),
+            "raw_uniform_squared_norm": original.energy(uniform, block),
+            "nonconflicting_reference_squared_norm": original.energy(reference, block),
+            "actual_nonconflicting_candidate_energy": original.energy(candidate, block),
+            "candidate_target_dot": original.dot(candidate, target, block),
+            "matched_correction_target_dot": original.dot(correction, target, block),
+            "actual_matched_correction_energy": original.energy(correction, block)}
+    audit["geometry_audit_deterministically_recomputed_from_uploaded_deltas"] = True
     assert all(original.is_shared(k, "full_private") and bool(torch.isfinite(v).all()) for k, v in new.items())
     audit.update(shared_anchor_sha256=tree_sha(shared), new_shared_sha256=tree_sha(new),
                  client_delta_sha256={c: tree_sha(updates[c]) for c in CITIES}, source_order=source_order,
@@ -524,9 +435,9 @@ def datasets(target, cfg):
     full = TrafficWindows(td, window_starts_inside(support, 12, 6), 12, 6, support)
     fit = clients[target]
     assert max(fit.starts) + 18 <= min(gate.starts) and max(gate.starts) + 18 <= min(validation.starts)
-    assert len(fit) == (415 if support.start == 0 else 199)
-    assert len(gate) == len(validation) == (199 if support.start == 0 else 91)
-    assert len(full) == (847 if support.start == 0 else 415)
+    assert len(fit) == 415
+    assert len(gate) == len(validation) == 199
+    assert len(full) == 847
     ranges["target_partitions"] = {"fit": [stats.start, stats.end], "gate": [gate_range.start, gate_range.end],
         "validation": [val_range.start, val_range.end], "final_support": [support.start, support.end],
         "fit_stats": [stats.start, stats.end], "gate_stats": [stats.start, stats.end], "validation_stats": [stats.start, stats.end],
@@ -832,7 +743,7 @@ def _run_job(cfg, out, target, hashes, device):
         "evaluation": {"completed_pass_sha256": sha(evaluation_path), "attempts": evaluated["evaluation_attempts"],
                        "completed_pass_reused_not_predicted_again_after_commit_interruption": True},
         "target_physical_support_days": cfg["target_support_days"][target] * (864 - cfg["support_start"]) / 864,
-        "initialization": {"seed": cfg["seed"], "C2_enabled": True, "candidate": "trend_innovation",
+        "initialization": {"seed": cfg["seed"], "candidate": "trend_innovation",
                            "model_sha256": tree_sha(initial), "shared_sha256": tree_sha({k: initial[k] for k in shared}),
                            "private_sha256": tree_sha({k: v for k, v in initial.items() if k not in shared}),
                            "innovation_weight_initialized_from_original_history_weight": torch.equal(initial["history_embed.0.innovation.weight"], initial["history_embed.0.weight"])},
@@ -853,18 +764,15 @@ def _run_job(cfg, out, target, hashes, device):
                 final["calibration_fit_batches"] + math.ceil(len(full) / 8)),
             "uncommitted_extra_work_bound_not_claimed_actual_measured_steps": True,
             "round_boundary_resume_repeats_uncommitted_round_not_partial_trajectory": True,
-            "serial_efficiency_benchmark_required_for_rankings": True,
             "retained_checkpoint_bytes": sum(a["bytes"] for a in list(progress["clients"].values()) + [progress["server_checkpoint"], final_progress["checkpoint"]])},
         "protocol": {"test_used_for_selection": False, "validation_used_for_selection": False,
             "published_values_used_for_selection": False, "private_parameters_uploaded": False,
             "same_initial_shared_anchor_all_clients": True, "all_sources": True, "source_window_cap": None,
             "optimizer_persistent_between_rounds": True, "primary_mask": "none", "auxiliary_mask": "truth!=0",
-            "source_loss_only_changed": True, "target_loss": "ordinary L1", "C2_enabled_all_controls": True,
-            "LSC_all_client_all_forward_paths": cfg["private_context_mode"], "zero_LSC_does_not_zero_observed_state_inputs": True,
+            "target_loss": "ordinary L1", "private_context_all_client_all_forward_paths": "local",
             "source_shared_private_joint_optimization": True, "server_aggregation": cfg["aggregation"],
-            "energy_reference_rule": "current-arm same-round arithmetic-mean-source FULL per functional block",
-            "numeric_energy_identical_between_different_trajectories_claimed": False,
-            "previously_seen_test_dates": True, "fair_sota_claim": False, "no_early_stopping": True},
+            "energy_reference_rule": "same-round arithmetic-mean-source FULL per functional block",
+            "no_early_stopping": True},
         "elapsed_s": time.perf_counter() - started, "elapsed_s_scope": "current invocation parallel-management wall time",
         "resumed_from_round": resumed_from, "peak_allocated_mb": torch.cuda.max_memory_allocated() / 2**20 if str(device).startswith("cuda") else 0.,
         "peak_reserved_mb": torch.cuda.max_memory_reserved() / 2**20 if str(device).startswith("cuda") else 0.}

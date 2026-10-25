@@ -19,13 +19,12 @@ class ReleaseTests(unittest.TestCase):
     def setUpClass(cls):
         torch.set_num_threads(1)
 
-    def test_settings_and_half_boundaries(self):
-        job = make_job(support="half")
+    def test_main_settings_and_support_boundaries(self):
+        job = make_job()
         cfg = job_config(load_settings(), job)
-        self.assertEqual((cfg["support_start"], cfg["support_fit_end"], cfg["support_gate_end"]), (432,648,756))
-        self.assertEqual(len(window_starts_inside(Range(432,864),12,6)),415)
+        self.assertEqual((cfg["support_start"], cfg["support_fit_end"], cfg["support_gate_end"]), (0,432,648))
         self.assertEqual(len(window_starts_inside(Range(0,864),12,6)),847)
-        self.assertEqual(describe_job(load_settings(), job)["support_steps"],432)
+        self.assertEqual(describe_job(load_settings(), job)["support_steps"],864)
 
     def test_model_sensor_count_and_calendar_independence(self):
         torch.manual_seed(0)
@@ -52,7 +51,7 @@ class ReleaseTests(unittest.TestCase):
         x = torch.randn(3,12,7,3)
         y = torch.randn(3,7,6)
         pred = torch.randn_like(y,requires_grad=True)
-        got,_ = source_objective(pred,y,x,"h2",torch.Generator().manual_seed(2))
+        got,_ = source_objective(pred,y,x,"h2")
         error=(pred-y).abs().mean(-1); membership=regime_weights(x).bool()
         states=[]
         for s in range(3):
@@ -62,11 +61,11 @@ class ReleaseTests(unittest.TestCase):
         torch.testing.assert_close(got,expected,rtol=0,atol=0)
         torch.testing.assert_close(torch.autograd.grad(got,pred,retain_graph=True)[0],torch.autograd.grad(expected,pred)[0],rtol=0,atol=0)
 
-    def test_all_source_modes_are_finite(self):
+    def test_source_teb_and_target_l1_are_finite(self):
         x=torch.randn(5,12,7,3); y=torch.randn(5,7,6)
-        for mode in ("ordinary","c5","h2","random_c5","pseudo_h2"):
+        for mode in ("ordinary","h2"):
             pred=torch.randn_like(y,requires_grad=True)
-            loss,_=source_objective(pred,y,x,mode,torch.Generator().manual_seed(17))
+            loss,_=source_objective(pred,y,x,mode)
             loss.backward()
             self.assertTrue(torch.isfinite(loss))
             self.assertTrue(torch.isfinite(pred.grad).all())

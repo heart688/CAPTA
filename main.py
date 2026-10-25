@@ -3,7 +3,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-from setting import CITIES, SOURCE_LOSSES, ROOT, load_settings, make_job, describe_job
+from setting import CITIES, ROOT, load_settings, make_job, describe_job
 
 
 def smoke():
@@ -17,7 +17,7 @@ def smoke():
     truth = torch.randn(3, 7, 6)
     pred = model(x)
     assert tuple(pred.shape) == (3, 7, 6)
-    loss, _ = source_objective(pred, truth, x, "h2", torch.Generator().manual_seed(0))
+    loss, _ = source_objective(pred, truth, x, "h2")
     loss.backward()
     assert torch.isfinite(loss) and all(torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None)
     print(json.dumps({"synthetic_CPU_smoke": "passed", "output_shape": list(pred.shape),
@@ -28,10 +28,6 @@ def main():
     parser = argparse.ArgumentParser(description="CAPTA cross-city traffic forecasting")
     parser.add_argument("--target", choices=CITIES, default="shenzhen")
     parser.add_argument("--seed", type=int, choices=range(5), default=0)
-    parser.add_argument("--support", choices=("full", "half"), default="full")
-    parser.add_argument("--source-loss", choices=SOURCE_LOSSES, default="h2")
-    parser.add_argument("--aggregation", choices=("tra", "fedavg", "off"), default="tra")
-    parser.add_argument("--context", choices=("local", "zero"), default="local")
     parser.add_argument("--config", type=Path, default=ROOT / "configs/default.json")
     parser.add_argument("--dataset", type=Path, default=ROOT / "configs/dataset.json")
     parser.add_argument("--data-root", type=Path, help="Override the data directory in the manifest")
@@ -41,7 +37,7 @@ def main():
     parser.add_argument("--smoke", action="store_true", help="Synthetic CPU forward/backward check only")
     args = parser.parse_args()
     base = load_settings(args.config)
-    job = make_job(args.target, args.seed, args.support, args.source_loss, args.aggregation, args.context)
+    job = make_job(args.target, args.seed)
     if args.check:
         print(json.dumps({"job": job, "settings": describe_job(base, job),
                           "training_started": False}, indent=2))

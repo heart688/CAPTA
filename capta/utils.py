@@ -16,19 +16,16 @@ def seed(n):
     if torch.cuda.is_available():torch.cuda.manual_seed_all(n)
 
 
-def is_shared(name,variant):
+def is_shared(name,variant='full_private'):
+    if variant != 'full_private':
+        raise ValueError("CAPTA keeps city-private residual parameters local")
     local_residual=('.private.' in name or name.endswith('.private_scale'))
-    return not(local_residual and variant!='shared_residual')
+    return not local_residual
 
 
-def train(model,ds,device,nseed,epochs,adapt=False,variant='full_private'):
+def train(model,ds,device,nseed,epochs,adapt=False):
     if adapt:
         adapt_policy(model,'no_calendar_residual')
-        # Reapply ablation freezes after the inherited adaptation policy.
-        for block in model.blocks:
-            disabled={'no_local_residual':'private','no_routing':'out','no_ffn':'ffn'}.get(variant)
-            if disabled:
-                for p in getattr(block,disabled).parameters():p.requires_grad_(False)
     seed(nseed)
     loader=DataLoader(ds,batch_size=8,shuffle=True,num_workers=0,
         generator=torch.Generator().manual_seed(nseed))
@@ -79,27 +76,23 @@ def solve(features,error,mask,scales,target_columns):
     assert torch.isfinite(weights).all()
     return weights.detach().numpy()
 
-def optimizer(model, recipe):
+def optimizer(model, recipe='private_lr2'):
+    if recipe != 'private_lr2':
+        raise ValueError("CAPTA uses the fixed head/private/rest adaptation rates")
     adapt_policy(model, 'no_calendar_residual')
-    if recipe == 'local_spatial_gate':
-        for name, p in model.named_parameters():
-            if name.endswith('.spatial_scale'):
-                p.requires_grad_(True)
     groups = {'head': [], 'rest': [], 'special': []}
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
         if name.startswith('head.'):
             groups['head'].append(p)
-        elif (recipe == 'local_spatial_gate' and name.endswith('.spatial_scale')) or (
-                recipe == 'private_lr2' and ('.private.' in name or name.endswith('.private_scale'))):
+        elif '.private.' in name or name.endswith('.private_scale'):
             groups['special'].append(p)
         else:
             groups['rest'].append(p)
     param_groups = [dict(params=groups['head'], lr=4e-4), dict(params=groups['rest'], lr=1e-4)]
     if groups['special']:
-        param_groups.append(dict(params=groups['special'], lr=2e-4 if recipe == 'private_lr2' else 1e-4,
-                                 weight_decay=0. if recipe == 'local_spatial_gate' else 1e-4))
+        param_groups.append(dict(params=groups['special'], lr=2e-4, weight_decay=1e-4))
     opt = torch.optim.AdamW(param_groups, weight_decay=1e-4)
     return opt, [n for n, p in model.named_parameters() if p.requires_grad]
 

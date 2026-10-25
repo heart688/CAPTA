@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from .utils import group, is_shared
 CITIES = ("metr-la", "pems-bay", "chengdu", "shenzhen")
+MIN_GROUP_SQUARED_NORM = 1e-20
 
 def energy(delta, keys=None):
     return sum(float(delta[k].double().square().sum()) for k in (keys or delta.keys()))
@@ -105,11 +106,23 @@ def server_aggregate(shared, source_updates, target_update, cfg):
     assert all(torch.isfinite(v).all() for d in source_updates+[target_update] for v in d.values())
     groups = sorted({group(k) for k in keys})
     blocks = [[k for k in keys if group(k) == g] for g in groups]
+    def require_nonzero(update, stage):
+        for name, block in zip(groups, blocks):
+            squared_norm = energy(update, block)
+            if not np.isfinite(squared_norm) or squared_norm <= MIN_GROUP_SQUARED_NORM:
+                raise FloatingPointError(
+                    f"TCA {stage} group {name}: squared norm {squared_norm} "
+                    f"must exceed {MIN_GROUP_SQUARED_NORM}")
+    # Appendix D requires stopping before any undefined projection/rescaling.
+    require_nonzero(target_update, "target update")
     uniform = {k: sum(v[k] for v in source_updates)/3 for k in keys}
     weighted, simplex = mgda_weights(source_updates, keys)
     reference = remove_conflicting_parallel(uniform, target_update, blocks)
     candidate = remove_conflicting_parallel(weighted, target_update, blocks)
+    require_nonzero(candidate, "projected source")
+    require_nonzero(reference, "energy reference")
     correction, energy_audit = match(candidate, reference, blocks)
+    assert energy_audit["all_blocks_matched"]
     cosines = [dot(correction, target_update, block)/max(
         (energy(correction, block)*energy(target_update, block))**.5, 1e-20) for block in blocks]
     conflict_error = max(max(-cosine, 0.) for cosine in cosines)

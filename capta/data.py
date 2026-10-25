@@ -123,18 +123,11 @@ class TrafficWindows(Dataset):
         starts: np.ndarray,
         history: int,
         horizon: int,
-        stats_range: Range | None,
+        stats_range: Range,
     ):
         self.city, self.starts, self.history, self.horizon = city, np.asarray(starts), history, horizon
-        if stats_range is None:
-            # Strict zero-shot mode: the model receives raw traffic values and a
-            # constant profile, so no target value outside each input history is
-            # used for preprocessing or conditioning.
-            self.mean, self.std = 0.0, 1.0
-            self.profile = np.zeros((city.features.shape[1], 21), dtype=np.float32)
-        else:
-            self.mean, self.std = fit_speed_stats(city.features, stats_range)
-            self.profile = node_profile(city.features, stats_range, self.mean, self.std)
+        self.mean, self.std = fit_speed_stats(city.features, stats_range)
+        self.profile = node_profile(city.features, stats_range, self.mean, self.std)
 
     def __len__(self) -> int:
         return len(self.starts)

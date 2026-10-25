@@ -24,7 +24,6 @@
   "source_train_fraction": 0.8,
   "source_window_cap": null,
   "source_loss": "h2",
-  "randomization_seed_offset": 716273,
   "aggregation": "tra",
   "quant_bits": 32,
   "beta": 0.6,
